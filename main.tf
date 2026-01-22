@@ -1,15 +1,25 @@
+# --- 1. CONFIGURACIÓN DE MEMORIA (BACKEND) ---
+terraform {
+  backend "s3" {
+    # ⚠️ REEMPLAZA ESTO CON TU BUCKET DE ESTADO REAL (El que creaste a mano)
+    bucket = "adcloudchile-backend" 
+    key    = "agentes-forenses/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 provider "aws" {
   region = "us-east-1"
 }
 
-# --- 1. EMPAQUETADO DEL CÓDIGO (NUEVO) ---
+# --- 2. EMPAQUETADO DEL CÓDIGO PYTHON ---
 data "archive_file" "codigo_agentes" {
   type        = "zip"
   source_file = "agentes.py"
   output_path = "agentes.zip"
 }
 
-# --- 2. ROLES Y PERMISOS LAMBDA (NUEVO) ---
+# --- 3. ROLES Y PERMISOS PARA LAMBDAS ---
 resource "aws_iam_role" "iam_para_lambda" {
   name = "AgentesForenseRole"
 
@@ -23,46 +33,45 @@ resource "aws_iam_role" "iam_para_lambda" {
   })
 }
 
-# Permiso básico para escribir Logs en CloudWatch
+# Permiso para escribir Logs en CloudWatch (Vital para debug)
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
   role       = aws_iam_role.iam_para_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# --- 3. LAS LAMBDAS (NUEVO) ---
+# --- 4. LOS 3 AGENTES (LAMBDAS CON PYTHON 3.12) ---
 
 resource "aws_lambda_function" "agente_analista" {
-  function_name = "Agente2_Analista"
-  role          = aws_iam_role.iam_para_lambda.arn
-  handler       = "agentes.agente_analista" # Archivo.Funcion
-  runtime       = "python3.9"
-  filename      = "agentes.zip"
+  function_name    = "Agente2_Analista"
+  role             = aws_iam_role.iam_para_lambda.arn
+  handler          = "agentes.agente_analista"
+  runtime          = "python3.12"  # Actualizado
+  filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout       = 10
+  timeout          = 30
 }
 
 resource "aws_lambda_function" "agente_estratega" {
-  function_name = "Agente3_Estratega"
-  role          = aws_iam_role.iam_para_lambda.arn
-  handler       = "agentes.agente_estratega"
-  runtime       = "python3.9"
-  filename      = "agentes.zip"
+  function_name    = "Agente3_Estratega"
+  role             = aws_iam_role.iam_para_lambda.arn
+  handler          = "agentes.agente_estratega"
+  runtime          = "python3.12"  # Actualizado
+  filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout       = 10
+  timeout          = 30
 }
 
 resource "aws_lambda_function" "agente_generador" {
-  function_name = "Agente4_Generador"
-  role          = aws_iam_role.iam_para_lambda.arn
-  handler       = "agentes.agente_generador"
-  runtime       = "python3.9"
-  filename      = "agentes.zip"
+  function_name    = "Agente4_Generador"
+  role             = aws_iam_role.iam_para_lambda.arn
+  handler          = "agentes.agente_generador"
+  runtime          = "python3.12"  # Actualizado
+  filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout       = 10
+  timeout          = 30
 }
 
-# --- 4. STEP FUNCTION (ACTUALIZADO) ---
-# Rol para que la Step Function pueda invocar Lambdas
+# --- 5. ROLES PARA STEP FUNCTIONS ---
 resource "aws_iam_role" "sfn_role" {
   name = "OrquestadorForenseRole"
   assume_role_policy = jsonencode({
@@ -70,6 +79,7 @@ resource "aws_iam_role" "sfn_role" {
   })
 }
 
+# Permiso para que Step Function invoque a las Lambdas
 resource "aws_iam_role_policy" "sfn_policy" {
   name = "PermisoInvocarLambdas"
   role = aws_iam_role.sfn_role.id
@@ -79,13 +89,14 @@ resource "aws_iam_role_policy" "sfn_policy" {
   })
 }
 
+# --- 6. EL ORQUESTADOR (STEP FUNCTION) ---
 resource "aws_sfn_state_machine" "orquestador" {
   name     = "FlujoAnalisisForense"
   role_arn = aws_iam_role.sfn_role.arn
 
   definition = <<EOF
 {
-  "Comment": "Orquestación de Agentes Forenses",
+  "Comment": "Orquestación de Agentes Forenses con IA",
   "StartAt": "AgenteAnalista",
   "States": {
     "AgenteAnalista": {
@@ -108,8 +119,19 @@ resource "aws_sfn_state_machine" "orquestador" {
 EOF
 }
 
-# --- 5. BUCKET (SE MANTIENE IGUAL) ---
+# --- 7. BUCKET DE INGESTA (BUZÓN) ---
 resource "aws_s3_bucket" "buzon_auditoria" {
   bucket_prefix = "forense-hub-ingesta-" 
   force_destroy = true
+}
+
+# Habilitar notificación a EventBridge (Para uso futuro)
+resource "aws_s3_bucket_notification" "bucket_notify" {
+  bucket      = aws_s3_bucket.buzon_auditoria.id
+  eventbridge = true
+}
+
+# Output para ver el nombre del bucket al final
+output "bucket_ingesta_nombre" {
+  value = aws_s3_bucket.buzon_auditoria.id
 }
