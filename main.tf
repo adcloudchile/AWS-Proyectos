@@ -50,7 +50,8 @@ resource "aws_iam_role_policy" "lambda_s3_read" {
   })
 }
 
-# --- LAMBDAS (Con Variable de Entorno para Gemini) ---
+# --- LAMBDAS (TIMEOUTS AUMENTADOS A 5 MINUTOS) ---
+
 resource "aws_lambda_function" "agente_analista" {
   function_name    = "Agente2_Analista"
   role             = aws_iam_role.iam_para_lambda.arn
@@ -58,7 +59,7 @@ resource "aws_lambda_function" "agente_analista" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 30
+  timeout          = 30 # Este es rápido, se queda en 30s
 }
 
 resource "aws_lambda_function" "agente_estratega" {
@@ -68,11 +69,10 @@ resource "aws_lambda_function" "agente_estratega" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 30
+  timeout          = 300 # <--- AUMENTADO A 5 MIN (Para esperar a Google)
 
   environment {
     variables = {
-      # ⚠️ ASEGÚRATE DE QUE TU API KEY ESTÉ AQUÍ
       GEMINI_API_KEY = "PON_AQUI_TU_API_KEY_DE_GOOGLE"
     }
   }
@@ -85,12 +85,11 @@ resource "aws_lambda_function" "agente_generador" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 60
+  timeout          = 300 # <--- AUMENTADO A 5 MIN (Para escribir código largo)
 
   environment {
     variables = {
-      # ⚠️ ASEGÚRATE DE QUE TU API KEY ESTÉ AQUÍ TAMBIÉN
-      GEMINI_API_KEY = "AIzaSyDsckFJBiX_5mtPHXPUgAudGbO0LDUvFkQ"
+      GEMINI_API_KEY = "PON_AQUI_TU_API_KEY_DE_GOOGLE"
     }
   }
 }
