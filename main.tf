@@ -54,6 +54,26 @@ resource "aws_iam_role_policy" "lambda_s3_read" {
   })
 }
 
+# --- PERMISO PARA USAR IA (BEDROCK) ---
+resource "aws_iam_role_policy" "lambda_bedrock" {
+  name = "PermisoInvocarBedrock"
+  role = aws_iam_role.iam_para_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:ListFoundationModels"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # --- LAMBDAS ---
 resource "aws_lambda_function" "agente_analista" {
   function_name    = "Agente2_Analista"

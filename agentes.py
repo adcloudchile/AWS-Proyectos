@@ -1,148 +1,143 @@
 import json
 import boto3
+import os
 
+# Clientes AWS
 s3_client = boto3.client("s3")
+bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+
+
+def invocar_claude(prompt):
+    """Función auxiliar para consultar a Claude 3 Haiku"""
+    body = json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4000,
+            "temperature": 0.1,  # Creatividad baja para que sea preciso con el código
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    )
+
+    try:
+        response = bedrock.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0", body=body
+        )
+        response_body = json.loads(response["body"].read())
+        return response_body["content"][0]["text"]
+    except Exception as e:
+        print(f"❌ Error invocando Bedrock: {e}")
+        return f"Error generando respuesta IA: {str(e)}"
 
 
 def agente_analista(event, context):
     """
-    AGENTE 2: Analista Financiero y de Seguridad.
-    Lee el JSON de S3 y detecta anomalías en Costos y Vulnerabilidades.
-    NO se conecta a la cuenta del cliente.
+    AGENTE 2 (LÓGICO): Lee JSON de S3, extrae costos y CVEs.
+    No usa IA, usa lógica determinista para ahorrar dinero y ser rápido.
     """
-    print("🕵️‍♂️ [Agente 2] Iniciando análisis del JSON del cliente...")
+    print("🕵️‍♂️ [Agente 2] Analizando datos crudos del cliente...")
 
     try:
-        # 1. Obtener el archivo desde S3 (Trigger de EventBridge)
+        # 1. Leer archivo de S3
         detail = event.get("detail", {})
         bucket_name = detail["bucket"]["name"]
         file_key = detail["object"]["key"]
 
-        print(f"📂 Descargando input: s3://{bucket_name}/{file_key}")
-
+        print(f"📂 Descargando: s3://{bucket_name}/{file_key}")
         response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
         content = response["Body"].read().decode("utf-8")
         datos_cliente = json.loads(content)
-
         aws_data = datos_cliente.get("aws_data", {})
 
-        # --- A. ANÁLISIS DE COSTOS ---
+        # 2. Filtrar Costos Altos (> $50 USD)
         costos = aws_data.get("last_month_costs", {})
         hallazgos_costos = []
-
-        # Umbral de alerta (ej: Servicios que gastan más de $100 USD)
-        UMBRAL_COSTO = 100.0
-
         for servicio, monto in costos.items():
-            if monto > UMBRAL_COSTO:
-                hallazgos_costos.append(
-                    {
-                        "servicio": servicio,
-                        "gasto": monto,
-                        "mensaje": f"Gasto elevado en {servicio}: ${monto} USD",
-                    }
-                )
+            if monto > 50.0:
+                hallazgos_costos.append(f"{servicio}: ${monto} USD")
 
-        # --- B. ANÁLISIS DE SEGURIDAD (CVEs) ---
+        # 3. Filtrar CVEs
         vulns = aws_data.get("critical_security_issues", [])
         hallazgos_seguridad = []
-
         for v in vulns:
-            # Extraemos lo vital del JSON
-            hallazgos_seguridad.append(
-                {
-                    "id": v.get("Title", "Unknown"),
-                    "recurso": v.get("Resource", "Unknown"),
-                    "descripcion": v.get("Description", "")[:100]
-                    + "...",  # Cortamos para no saturar
-                }
-            )
+            hallazgos_seguridad.append(f"{v.get('Title')} en {v.get('Resource')}")
 
-        # Retornamos el diagnóstico estructurado para el Agente 3
-        reporte_analista = {
+        # Pasamos el resumen limpio al Agente 3
+        return {
             "status": "OK",
-            "resumen_costos": hallazgos_costos,
-            "resumen_seguridad": hallazgos_seguridad,
-            "total_vulns": len(hallazgos_seguridad),
+            "contexto_cliente": {
+                "region": datos_cliente.get("account_region", "us-east-1"),
+                "fecha": datos_cliente.get("timestamp"),
+            },
+            "problemas_costo": hallazgos_costos,
+            "problemas_seguridad": hallazgos_seguridad,
         }
 
-        print(
-            f"✅ Análisis listo. {len(hallazgos_costos)} alertas de costo, {len(hallazgos_seguridad)} CVEs."
-        )
-        return reporte_analista
-
     except Exception as e:
-        print(f"❌ Error procesando el JSON: {str(e)}")
+        print(f"❌ Error leyendo S3: {e}")
         return {"status": "ERROR", "error": str(e)}
 
 
 def agente_estratega(event, context):
     """
-    AGENTE 3: Estratega.
-    Recibe el reporte del Agente 2 y decide QUÉ hacer.
-    Genera un plan de remediación en texto plano.
+    AGENTE 3 (IA): Recibe la lista de problemas y prioriza.
     """
-    print("🧠 [Agente 3] Diseñando estrategia de remediación...")
+    print("🧠 [Agente 3] Estratega pensando con Bedrock...")
 
-    analisis = event  # Input del Agente 2
+    if event.get("status") == "ERROR":
+        return {"estrategia": "No se puede generar estrategia por error previo."}
 
-    if analisis.get("status") == "ERROR":
-        return {"plan": ["Error en etapa previa. Revisar formato JSON."]}
+    costos = event.get("problemas_costo", [])
+    seguridad = event.get("problemas_seguridad", [])
 
-    plan_accion = []
+    prompt = f"""
+    Actúa como un Arquitecto de Soluciones AWS Senior.
+    Tengo un cliente con los siguientes problemas detectados:
+    
+    COSTOS ELEVADOS:
+    {json.dumps(costos, indent=2)}
+    
+    VULNERABILIDADES CRÍTICAS:
+    {json.dumps(seguridad, indent=2)}
+    
+    Tu tarea:
+    1. Selecciona las top 3 prioridades (mezcla de costo y seguridad).
+    2. Define una acción técnica concreta para cada una.
+    3. Devuelve SOLO un texto plano con formato de lista. NO uses Markdown.
+    """
 
-    # 1. Estrategia de Costos
-    costos_altos = analisis.get("resumen_costos", [])
-    if costos_altos:
-        plan_accion.append("--- 💰 OPTIMIZACIÓN DE COSTOS ---")
-        for c in costos_altos:
-            if "CloudTrail" in c["servicio"]:
-                plan_accion.append(
-                    f"⚠️ {c['servicio']} (${c['gasto']}): Revisar si hay 'Data Events' activados innecesariamente en todos los buckets."
-                )
-            elif "RDS" in c["servicio"]:
-                plan_accion.append(
-                    f"⚠️ {c['servicio']} (${c['gasto']}): Evaluar compra de Reserved Instances o apagar instancias de desarrollo fuera de horario."
-                )
-            else:
-                plan_accion.append(
-                    f"⚠️ {c['servicio']} (${c['gasto']}): Revisar recursos ociosos o sobredimensionados."
-                )
-
-    # 2. Estrategia de Seguridad
-    vulns = analisis.get("resumen_seguridad", [])
-    if vulns:
-        plan_accion.append("\n--- 🛡️ PARCHADO DE SEGURIDAD ---")
-        for v in vulns:
-            if "Tomcat" in v["id"]:
-                plan_accion.append(
-                    f"🚨 CRÍTICO {v['id']}: Actualizar Apache Tomcat inmediatamente en el recurso {v['recurso']}."
-                )
-            elif "SnakeYaml" in v["id"]:
-                plan_accion.append(
-                    f"🚨 CRÍTICO {v['id']}: Actualizar librería SnakeYaml a versión 2.0+ para evitar RCE."
-                )
-            else:
-                plan_accion.append(
-                    f"🔸 {v['id']}: Revisar y aplicar parches de seguridad del proveedor."
-                )
-
-    return {"plan_final": plan_accion}
+    estrategia_ia = invocar_claude(prompt)
+    return {"plan_maestro": estrategia_ia, "raw_data": event}
 
 
 def agente_generador(event, context):
     """
-    AGENTE 4: Redactor.
-    Toma el plan y genera el reporte final para el cliente.
+    AGENTE 4 (IA): El Programador.
+    Genera el script de Python final para el cliente.
     """
-    print("👷 [Agente 4] Generando entregable final...")
+    print("👷 [Agente 4] Escribiendo código de remediación...")
 
-    plan = event.get("plan_final", [])
+    plan = event.get("plan_maestro", "")
 
-    # Convertimos la lista en un texto bonito
-    texto_reporte = "\n".join(plan)
+    prompt = f"""
+    Eres un experto Desarrollador DevOps en Python (Boto3).
+    Basado en este plan de remediación:
+    {plan}
+    
+    Genera UN SOLO script de Python completo, listo para copiar y pegar, que:
+    1. Use 'boto3' para listar los recursos afectados mencionados.
+    2. Imprima por consola recomendaciones de remediación específicas para esos recursos.
+    3. Si el plan menciona Security Groups o EC2, incluye funciones para auditar esos recursos.
+    
+    REGLAS:
+    - El código debe ser robusto (try/except).
+    - Incluye comentarios en español.
+    - NO expliques nada antes ni después. SOLO devuelve el bloque de código Python.
+    """
 
-    # Aquí podrías guardar este reporte en otro bucket de "Salida" para que el cliente lo descargue
-    # Por ahora, lo retornamos como final de la Step Function
+    script_python = invocar_claude(prompt)
 
-    return {"resultado": "EXITO", "recomendaciones_cliente": texto_reporte}
+    return {
+        "resultado": "EXITO",
+        "recomendaciones_texto": plan,
+        "script_generado": script_python,
+    }
