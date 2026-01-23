@@ -3,41 +3,60 @@ import boto3
 import os
 import urllib.request
 import urllib.error
+import time
 
 s3_client = boto3.client("s3")
 
 
-def invocar_gemini(prompt):
+def invocar_gemini(prompt, intentos=3):
     """
-    Función que conecta AWS Lambda con Google Gemini vía API REST.
-    No requiere librerías externas.
+    Cliente para Google Gemini usando el alias 'gemini-flash-latest'
+    que garantiza mejor disponibilidad en capa gratuita.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return "ERROR: No se configuró la API Key de Gemini."
+    # 1. Limpieza de API Key
+    raw_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = raw_key.strip().replace("'", "").replace('"', "")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    if not api_key:
+        return "ERROR: La variable GEMINI_API_KEY está vacía."
+
+    # --- CAMBIO CLAVE: Usamos el alias estable ---
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
-
-    # Payload exacto que pide Google
     data = {"contents": [{"parts": [{"text": prompt}]}]}
+    json_data = json.dumps(data).encode("utf-8")
 
-    try:
-        req = urllib.request.Request(
-            url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST"
-        )
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            # Extraer el texto de la respuesta de Google
-            return result["candidates"][0]["content"]["parts"][0]["text"]
+    # Lógica de reintento simple
+    for i in range(intentos):
+        try:
+            req = urllib.request.Request(
+                url, data=json_data, headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                try:
+                    return result["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    return f"Respuesta inesperada: {json.dumps(result)}"
 
-    except Exception as e:
-        print(f"❌ Error conectando con Gemini: {e}")
-        return f"Error IA: {str(e)}"
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # Too Many Requests
+                print(
+                    f"⚠️ Cuota excedida (Intento {i+1}/{intentos}). Esperando 5 seg..."
+                )
+                time.sleep(5)  # Esperar antes de reintentar
+                continue
+            else:
+                error_body = e.read().decode("utf-8")
+                return f"Error Google ({e.code}): {error_body}"
+        except Exception as e:
+            return f"Error Script: {str(e)}"
+
+    return "Error: Se agotaron los reintentos con la IA."
 
 
-# --- AGENTE 2: ANALISTA (Sin IA, extrae datos) ---
+# --- AGENTE 2: ANALISTA ---
 def agente_analista(event, context):
     print("🕵️‍♂️ [Agente 2] Analizando datos...")
     try:
@@ -49,6 +68,7 @@ def agente_analista(event, context):
         datos = json.loads(response["Body"].read().decode("utf-8"))
         aws_data = datos.get("aws_data", {})
 
+        # Filtros
         costos = [
             f"{k}: ${v}"
             for k, v in aws_data.get("last_month_costs", {}).items()
@@ -61,47 +81,44 @@ def agente_analista(event, context):
         return {"status": "ERROR", "error": str(e)}
 
 
-# --- AGENTE 3: ESTRATEGA (Con GEMINI) ---
+# --- AGENTE 3: ESTRATEGA ---
 def agente_estratega(event, context):
-    print("🧠 [Agente 3] Consultando a Google Gemini...")
+    print("🧠 [Agente 3] Consultando Gemini...")
+
+    costos = event.get("costos", [])
+    seguridad = event.get("seguridad", [])
 
     prompt = f"""
-    Eres un Arquitecto de Soluciones AWS experto.
-    Analiza estos problemas de un cliente:
-    COSTOS ALTOS: {event.get('costos')}
-    VULNERABILIDADES: {event.get('seguridad')}
+    Eres un Arquitecto AWS. Analiza:
+    COSTOS ALTOS: {costos}
+    VULNERABILIDADES: {seguridad}
     
-    Prioriza 3 acciones técnicas de remediación. Responde solo con la lista de acciones.
+    Dame 3 acciones de remediación técnicas y breves.
     """
 
     plan = invocar_gemini(prompt)
     return {"plan_maestro": plan}
 
 
-# --- AGENTE 4: GENERADOR (Con GEMINI) ---
+# --- AGENTE 4: GENERADOR ---
 def agente_generador(event, context):
-    print("👷 [Agente 4] Gemini generando código Python...")
+    print("👷 [Agente 4] Generando código Python...")
 
     plan = event.get("plan_maestro", "")
 
     prompt = f"""
-    Eres un programador experto en Python y Boto3.
-    Escribe un script de Python completo para realizar estas tareas de remediación AWS:
+    Eres experto en Python Boto3.
+    Crea un script para:
     {plan}
     
-    Requisitos:
-    1. Usa la librería 'boto3'.
-    2. Incluye manejo de errores (try/except).
-    3. NO uses Markdown. NO incluyas explicaciones. SOLO EL CÓDIGO PYTHON PURO.
+    SOLO código Python puro. Sin markdown.
     """
 
     script = invocar_gemini(prompt)
-
-    # Limpieza: A veces la IA devuelve ```python ... ```, lo limpiamos
     script_limpio = script.replace("```python", "").replace("```", "")
 
     return {
         "resultado": "EXITO",
-        "ia_usada": "Google Gemini 1.5 Flash",
+        "ia_usada": "Gemini Flash Latest",
         "script_generado": script_limpio,
     }
