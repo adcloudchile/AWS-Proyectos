@@ -1,143 +1,107 @@
 import json
 import boto3
 import os
+import urllib.request
+import urllib.error
 
-# Clientes AWS
 s3_client = boto3.client("s3")
-bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 
 
-def invocar_claude(prompt):
-    """Función auxiliar para consultar a Claude 3 Haiku"""
-    body = json.dumps(
-        {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4000,
-            "temperature": 0.1,  # Creatividad baja para que sea preciso con el código
-            "messages": [{"role": "user", "content": prompt}],
-        }
-    )
+def invocar_gemini(prompt):
+    """
+    Función que conecta AWS Lambda con Google Gemini vía API REST.
+    No requiere librerías externas.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return "ERROR: No se configuró la API Key de Gemini."
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+
+    headers = {"Content-Type": "application/json"}
+
+    # Payload exacto que pide Google
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        response = bedrock.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0", body=body
+        req = urllib.request.Request(
+            url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST"
         )
-        response_body = json.loads(response["body"].read())
-        return response_body["content"][0]["text"]
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            # Extraer el texto de la respuesta de Google
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+
     except Exception as e:
-        print(f"❌ Error invocando Bedrock: {e}")
-        return f"Error generando respuesta IA: {str(e)}"
+        print(f"❌ Error conectando con Gemini: {e}")
+        return f"Error IA: {str(e)}"
 
 
+# --- AGENTE 2: ANALISTA (Sin IA, extrae datos) ---
 def agente_analista(event, context):
-    """
-    AGENTE 2 (LÓGICO): Lee JSON de S3, extrae costos y CVEs.
-    No usa IA, usa lógica determinista para ahorrar dinero y ser rápido.
-    """
-    print("🕵️‍♂️ [Agente 2] Analizando datos crudos del cliente...")
-
+    print("🕵️‍♂️ [Agente 2] Analizando datos...")
     try:
-        # 1. Leer archivo de S3
         detail = event.get("detail", {})
         bucket_name = detail["bucket"]["name"]
         file_key = detail["object"]["key"]
 
-        print(f"📂 Descargando: s3://{bucket_name}/{file_key}")
         response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-        content = response["Body"].read().decode("utf-8")
-        datos_cliente = json.loads(content)
-        aws_data = datos_cliente.get("aws_data", {})
+        datos = json.loads(response["Body"].read().decode("utf-8"))
+        aws_data = datos.get("aws_data", {})
 
-        # 2. Filtrar Costos Altos (> $50 USD)
-        costos = aws_data.get("last_month_costs", {})
-        hallazgos_costos = []
-        for servicio, monto in costos.items():
-            if monto > 50.0:
-                hallazgos_costos.append(f"{servicio}: ${monto} USD")
+        costos = [
+            f"{k}: ${v}"
+            for k, v in aws_data.get("last_month_costs", {}).items()
+            if v > 50
+        ]
+        vulns = [v.get("Title") for v in aws_data.get("critical_security_issues", [])]
 
-        # 3. Filtrar CVEs
-        vulns = aws_data.get("critical_security_issues", [])
-        hallazgos_seguridad = []
-        for v in vulns:
-            hallazgos_seguridad.append(f"{v.get('Title')} en {v.get('Resource')}")
-
-        # Pasamos el resumen limpio al Agente 3
-        return {
-            "status": "OK",
-            "contexto_cliente": {
-                "region": datos_cliente.get("account_region", "us-east-1"),
-                "fecha": datos_cliente.get("timestamp"),
-            },
-            "problemas_costo": hallazgos_costos,
-            "problemas_seguridad": hallazgos_seguridad,
-        }
-
+        return {"status": "OK", "costos": costos, "seguridad": vulns}
     except Exception as e:
-        print(f"❌ Error leyendo S3: {e}")
         return {"status": "ERROR", "error": str(e)}
 
 
+# --- AGENTE 3: ESTRATEGA (Con GEMINI) ---
 def agente_estratega(event, context):
-    """
-    AGENTE 3 (IA): Recibe la lista de problemas y prioriza.
-    """
-    print("🧠 [Agente 3] Estratega pensando con Bedrock...")
-
-    if event.get("status") == "ERROR":
-        return {"estrategia": "No se puede generar estrategia por error previo."}
-
-    costos = event.get("problemas_costo", [])
-    seguridad = event.get("problemas_seguridad", [])
+    print("🧠 [Agente 3] Consultando a Google Gemini...")
 
     prompt = f"""
-    Actúa como un Arquitecto de Soluciones AWS Senior.
-    Tengo un cliente con los siguientes problemas detectados:
+    Eres un Arquitecto de Soluciones AWS experto.
+    Analiza estos problemas de un cliente:
+    COSTOS ALTOS: {event.get('costos')}
+    VULNERABILIDADES: {event.get('seguridad')}
     
-    COSTOS ELEVADOS:
-    {json.dumps(costos, indent=2)}
-    
-    VULNERABILIDADES CRÍTICAS:
-    {json.dumps(seguridad, indent=2)}
-    
-    Tu tarea:
-    1. Selecciona las top 3 prioridades (mezcla de costo y seguridad).
-    2. Define una acción técnica concreta para cada una.
-    3. Devuelve SOLO un texto plano con formato de lista. NO uses Markdown.
+    Prioriza 3 acciones técnicas de remediación. Responde solo con la lista de acciones.
     """
 
-    estrategia_ia = invocar_claude(prompt)
-    return {"plan_maestro": estrategia_ia, "raw_data": event}
+    plan = invocar_gemini(prompt)
+    return {"plan_maestro": plan}
 
 
+# --- AGENTE 4: GENERADOR (Con GEMINI) ---
 def agente_generador(event, context):
-    """
-    AGENTE 4 (IA): El Programador.
-    Genera el script de Python final para el cliente.
-    """
-    print("👷 [Agente 4] Escribiendo código de remediación...")
+    print("👷 [Agente 4] Gemini generando código Python...")
 
     plan = event.get("plan_maestro", "")
 
     prompt = f"""
-    Eres un experto Desarrollador DevOps en Python (Boto3).
-    Basado en este plan de remediación:
+    Eres un programador experto en Python y Boto3.
+    Escribe un script de Python completo para realizar estas tareas de remediación AWS:
     {plan}
     
-    Genera UN SOLO script de Python completo, listo para copiar y pegar, que:
-    1. Use 'boto3' para listar los recursos afectados mencionados.
-    2. Imprima por consola recomendaciones de remediación específicas para esos recursos.
-    3. Si el plan menciona Security Groups o EC2, incluye funciones para auditar esos recursos.
-    
-    REGLAS:
-    - El código debe ser robusto (try/except).
-    - Incluye comentarios en español.
-    - NO expliques nada antes ni después. SOLO devuelve el bloque de código Python.
+    Requisitos:
+    1. Usa la librería 'boto3'.
+    2. Incluye manejo de errores (try/except).
+    3. NO uses Markdown. NO incluyas explicaciones. SOLO EL CÓDIGO PYTHON PURO.
     """
 
-    script_python = invocar_claude(prompt)
+    script = invocar_gemini(prompt)
+
+    # Limpieza: A veces la IA devuelve ```python ... ```, lo limpiamos
+    script_limpio = script.replace("```python", "").replace("```", "")
 
     return {
         "resultado": "EXITO",
-        "recomendaciones_texto": plan,
-        "script_generado": script_python,
+        "ia_usada": "Google Gemini 1.5 Flash",
+        "script_generado": script_limpio,
     }
