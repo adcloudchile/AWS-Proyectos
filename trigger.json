@@ -1,4 +1,63 @@
 {
-    "mensaje": "Hola Agentes, despierten!",
-    "fecha": "2026-01-23"
+    "timestamp": "2026-01-23 09:46:36.008413",
+    "account_region": "us-east-1",
+    "aws_data": {
+        "last_month_costs": {
+            "AWS CloudTrail": 1023.29,
+            "AWS Config": 15.23,
+            "AWS Glue": 916.71,
+            "AWS Key Management Service": 3.36,
+            "AWS Lambda": 0.59,
+            "AWS Secrets Manager": 11.39,
+            "AWS Security Hub": 10.06,
+            "AWS Step Functions": 2.19,
+            "Amazon Athena": 0.35,
+            "Amazon EC2 Container Registry (ECR)": 0.89,
+            "EC2 - Other": 4.56,
+            "Amazon Elastic Compute Cloud - Compute": 72.19,
+            "Amazon Elastic Container Service": 82.0,
+            "Amazon Elastic Load Balancing": 13.04,
+            "Amazon GuardDuty": 67.91,
+            "Amazon Inspector": 4.86,
+            "Amazon Kinesis Firehose": 0.43,
+            "Amazon Relational Database Service": 685.04,
+            "Amazon Simple Notification Service": 0.04,
+            "Amazon Simple Queue Service": 0.03,
+            "Amazon Simple Storage Service": 85.74,
+            "Amazon Virtual Private Cloud": 103.36,
+            "AmazonCloudWatch": 286.51,
+            "Apache Kafka\u00ae & Apache Flink\u00ae on Confluent Cloud\u2122 - Pay As You Go": 532.44,
+            "CloudWatch Events": 0.0,
+            "Savings Plans for AWS Compute usage": 636.67,
+            "[Private] AWS ELA/ESA": 6054.75
+        },
+        "critical_security_issues": [
+            {
+                "Title": "CVE-2022-1471 - org.yaml:snakeyaml, org.yaml:snakeyaml",
+                "Resource": "arn:aws:ecr:us-east-1:471112717773:repository/ecr-cnsr-pci-smv-merchant-installment-visa-retry/sha256:2cc80f7addc2146bfbf679f2a181fbde2d2b0e98ff2835a025d356bb98fcef6a",
+                "Description": "SnakeYaml's Constructor() class does not restrict types which can be instantiated during deserialization.\u00a0Deserializing yaml content provided by an attacker can lead to remote code execution. We recommend using SnakeYaml's SafeConsturctor when parsing untrusted content to restrict deserialization. We recommend upgrading to version 2.0 and beyond."
+            },
+            {
+                "Title": "CVE-2025-31651 - org.apache.tomcat.embed:tomcat-embed-core",
+                "Resource": "arn:aws:ecr:us-east-1:471112717773:repository/ecr-cnsr-pci-smv-merchant-installment-visa-retry/sha256:2cc80f7addc2146bfbf679f2a181fbde2d2b0e98ff2835a025d356bb98fcef6a",
+                "Description": "Improper Neutralization of Escape, Meta, or Control Sequences vulnerability in Apache Tomcat.\u00a0For a subset of unlikely rewrite rule configurations, it was possible for a specially crafted request to bypass some rewrite rules. If those rewrite rules effectively enforced security constraints, those constraints could be bypassed.\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.5, from 10.1.0-M1 through 10.1.39, from 9.0.0.M1 through 9.0.102. The following versions were EOL at the time the CVE was created but are known to be affected: 8.5.0 though 8.5.100. Other, older, EOL versions may also be affected.\n\nUsers are recommended to upgrade to version [FIXED_VERSION], which fixes the issue."
+            },
+            {
+                "Title": "CVE-2024-50379 - org.apache.tomcat.embed:tomcat-embed-core",
+                "Resource": "arn:aws:ecr:us-east-1:471112717773:repository/ecr-cnsr-pci-smv-merchant-installment-visa-retry/sha256:2cc80f7addc2146bfbf679f2a181fbde2d2b0e98ff2835a025d356bb98fcef6a",
+                "Description": "Time-of-check Time-of-use (TOCTOU) Race Condition vulnerability during JSP compilation in Apache Tomcat permits an RCE on case insensitive file systems when the default servlet is enabled for write (non-default configuration).\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.1, from 10.1.0-M1 through 10.1.33, from 9.0.0.M1 through 9.0.97.\n\nThe following versions were EOL at the time the CVE was created but are known to be affected: 8.5.0 though 8.5.100. Other, older, EOL versions may also be affected.\n\nUsers are recommended to upgrade to version 11.0.2, 10.1.34 or 9.0.98, which fixes the issue."
+            },
+            {
+                "Title": "CVE-2025-55754 - org.apache.tomcat.embed:tomcat-embed-core",
+                "Resource": "arn:aws:ecr:us-east-1:471112717773:repository/ecr-cnsr-pci-smv-merchant-installment-visa-retry/sha256:2cc80f7addc2146bfbf679f2a181fbde2d2b0e98ff2835a025d356bb98fcef6a",
+                "Description": "Improper Neutralization of Escape, Meta, or Control Sequences vulnerability in Apache Tomcat.\n\nTomcat did not escape ANSI escape sequences in log messages. If Tomcat was running in a console on a Windows operating system, and the console supported ANSI escape sequences, it was possible for an attacker to use a specially crafted URL to inject ANSI escape sequences to manipulate the console and the clipboard and attempt to trick an administrator into running an attacker controlled command. While no attack vector was found, it may have been possible to mount this attack on other operating systems.\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.10, from 10.1.0-M1 through 10.1.44, from 9.0.40 through 9.0.108.\n\nThe following versions were EOL at the time the CVE was created but are known to be affected: 8.5.60 though 8.5.100. Other, older, EOL versions may also be affected. Users are recommended to upgrade to version 11.0.11 or later, 10.1.45 or later or 9.0.109 or later, which fix the issue."
+            },
+            {
+                "Title": "CVE-2024-52316 - org.apache.tomcat.embed:tomcat-embed-core",
+                "Resource": "arn:aws:ecr:us-east-1:471112717773:repository/ecr-cnsr-pci-smv-merchant-installment-visa-retry/sha256:2cc80f7addc2146bfbf679f2a181fbde2d2b0e98ff2835a025d356bb98fcef6a",
+                "Description": "Unchecked Error Condition vulnerability in Apache Tomcat. If Tomcat is configured to use a custom Jakarta Authentication (formerly JASPIC)\u00a0ServerAuthContext component which may throw an exception during the authentication process without explicitly setting an HTTP status to indicate failure, the authentication may not fail, allowing the user to bypass the authentication process. There are no known Jakarta\u00a0Authentication components that behave in this way.\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.0-M26, from 10.1.0-M1 through 10.1.30, from 9.0.0-M1 through 9.0.95.\n\nThe following versions were EOL at the time the CVE was created but are known to be affected: 8.5.0 though 8.5.100.\u00a0Other EOL versions may also be affected.\n\nUsers are recommended to upgrade to version 11.0.0, 10.1.31 or 9.0.96, which fix the issue."
+            }
+        ],
+        "potential_waste_ec2": []
+    }
 }
