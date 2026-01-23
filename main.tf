@@ -10,13 +10,14 @@ provider "aws" {
   region = "us-east-1"
 }
 
+# Empaquetado automático del código Python
 data "archive_file" "codigo_agentes" {
   type        = "zip"
   source_file = "agentes.py"
   output_path = "agentes.zip"
 }
 
-# --- ROLES ---
+# --- ROLES IAM ---
 resource "aws_iam_role" "iam_para_lambda" {
   name = "AgentesForenseRole"
   assume_role_policy = jsonencode({
@@ -50,8 +51,9 @@ resource "aws_iam_role_policy" "lambda_s3_read" {
   })
 }
 
-# --- LAMBDAS (TIMEOUTS AUMENTADOS A 5 MINUTOS) ---
+# --- LAMBDAS ---
 
+# Agente 2: Rápido, solo lee S3
 resource "aws_lambda_function" "agente_analista" {
   function_name    = "Agente2_Analista"
   role             = aws_iam_role.iam_para_lambda.arn
@@ -59,9 +61,10 @@ resource "aws_lambda_function" "agente_analista" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 30 # Este es rápido, se queda en 30s
+  timeout          = 30 
 }
 
+# Agente 3: Lento, habla con IA (Timeout 5 min para reintentos)
 resource "aws_lambda_function" "agente_estratega" {
   function_name    = "Agente3_Estratega"
   role             = aws_iam_role.iam_para_lambda.arn
@@ -69,7 +72,7 @@ resource "aws_lambda_function" "agente_estratega" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 300 # <--- AUMENTADO A 5 MIN (Para esperar a Google)
+  timeout          = 300 
 
   environment {
     variables = {
@@ -78,6 +81,7 @@ resource "aws_lambda_function" "agente_estratega" {
   }
 }
 
+# Agente 4: Lento, escribe código (Timeout 5 min para reintentos)
 resource "aws_lambda_function" "agente_generador" {
   function_name    = "Agente4_Generador"
   role             = aws_iam_role.iam_para_lambda.arn
@@ -85,7 +89,7 @@ resource "aws_lambda_function" "agente_generador" {
   runtime          = "python3.12"
   filename         = "agentes.zip"
   source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 300 # <--- AUMENTADO A 5 MIN (Para escribir código largo)
+  timeout          = 300 
 
   environment {
     variables = {
@@ -94,7 +98,7 @@ resource "aws_lambda_function" "agente_generador" {
   }
 }
 
-# --- STEP FUNCTIONS ---
+# --- STEP FUNCTIONS (Con Semáforos de Espera) ---
 resource "aws_iam_role" "sfn_role" {
   name = "OrquestadorForenseRole"
   assume_role_policy = jsonencode({
@@ -125,17 +129,27 @@ resource "aws_sfn_state_machine" "orquestador" {
   role_arn = aws_iam_role.sfn_role.arn
   definition = <<EOF
 {
-  "Comment": "Orquestación de Agentes con Google Gemini",
+  "Comment": "Orquestación con Semáforos para evitar Rate Limit de Google",
   "StartAt": "AgenteAnalista",
   "States": {
     "AgenteAnalista": {
       "Type": "Task",
       "Resource": "${aws_lambda_function.agente_analista.arn}",
+      "Next": "EsperarEnfriamiento1"
+    },
+    "EsperarEnfriamiento1": {
+      "Type": "Wait",
+      "Seconds": 20,
       "Next": "AgenteEstratega"
     },
     "AgenteEstratega": {
       "Type": "Task",
       "Resource": "${aws_lambda_function.agente_estratega.arn}",
+      "Next": "EsperarEnfriamiento2"
+    },
+    "EsperarEnfriamiento2": {
+      "Type": "Wait",
+      "Seconds": 20,
       "Next": "AgenteGenerador"
     },
     "AgenteGenerador": {
@@ -148,7 +162,7 @@ resource "aws_sfn_state_machine" "orquestador" {
 EOF
 }
 
-# --- BUCKET DE INGESTA ---
+# --- S3 & EVENTBRIDGE ---
 resource "aws_s3_bucket" "buzon_auditoria" {
   bucket_prefix = "forense-hub-ingesta-"
   force_destroy = true
@@ -159,7 +173,6 @@ resource "aws_s3_bucket_notification" "bucket_notify" {
   eventbridge = true
 }
 
-# --- EVENTBRIDGE ---
 resource "aws_iam_role" "eventbridge_role" {
   name = "EventBridgeInvokeSFNRole"
   assume_role_policy = jsonencode({
