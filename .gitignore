@@ -1,0 +1,8 @@
+# Ignorar archivos de variables con secretos
+terraform.tfvars
+*.tfvars
+
+# Ignorar estado de Terraform (también contiene datos sensibles)
+*.tfstate
+*.tfstate.backup
+.terraform/

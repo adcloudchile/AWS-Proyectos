@@ -1,25 +1,104 @@
 terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  
   backend "s3" {
-    bucket = "adcloudchile-backend"
-    key    = "agentes-forenses/terraform.tfstate"
-    region = "us-east-1"
+    bucket         = "adcloudchile-backend"
+    key            = "agentes-forenses/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "terraform-locks"
   }
 }
 
 provider "aws" {
   region = "us-east-1"
+  
+  default_tags {
+    tags = {
+      Project     = "AgentesForenses"
+      Environment = var.environment
+      ManagedBy   = "Terraform"
+      CreatedAt   = timestamp()
+    }
+  }
 }
 
-# Empaquetado automático del código Python
+# --- SECRETS MANAGER ---
+resource "aws_secretsmanager_secret" "gemini_api_key" {
+  name                    = "gemini-api-key-${var.environment}"
+  recovery_window_in_days = 7
+  description             = "API Key para Google Gemini"
+}
+
+resource "aws_secretsmanager_secret_version" "gemini_api_key" {
+  secret_id     = aws_secretsmanager_secret.gemini_api_key.id
+  secret_string = jsonencode({
+    api_key = var.gemini_api_key
+  })
+}
+
+# --- S3 BUCKETS ---
+resource "aws_s3_bucket" "buzon_auditoria" {
+  bucket_prefix = "forense-hub-ingesta-${var.environment}-"
+  force_destroy = false
+}
+
+resource "aws_s3_bucket_versioning" "buzon_auditoria" {
+  bucket = aws_s3_bucket.buzon_auditoria.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "buzon_auditoria" {
+  bucket = aws_s3_bucket.buzon_auditoria.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_notification" "bucket_notify" {
+  bucket      = aws_s3_bucket.buzon_auditoria.id
+  eventbridge = true
+}
+
+resource "aws_s3_bucket" "lambda_code" {
+  bucket_prefix = "lambda-code-${var.environment}-"
+}
+
+resource "aws_s3_bucket_versioning" "lambda_code" {
+  bucket = aws_s3_bucket.lambda_code.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# --- EMPAQUETADO ---
 data "archive_file" "codigo_agentes" {
   type        = "zip"
-  source_file = "agentes.py"
-  output_path = "agentes.zip"
+  source_file = "${path.module}/agentes.py"
+  output_path = "${path.module}/agentes-${var.version}.zip"
 }
 
-# --- ROLES IAM ---
+resource "aws_s3_object" "lambda_zip" {
+  bucket = aws_s3_bucket.lambda_code.id
+  key    = "agentes-${var.version}.zip"
+  source = data.archive_file.codigo_agentes.output_path
+  etag   = data.archive_file.codigo_agentes.output_base64sha256
+}
+
+# --- IAM ROLES ---
 resource "aws_iam_role" "iam_para_lambda" {
-  name = "AgentesForenseRole"
+  name               = "AgentesForenseRole-${var.environment}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -51,56 +130,114 @@ resource "aws_iam_role_policy" "lambda_s3_read" {
   })
 }
 
+resource "aws_iam_role_policy" "lambda_secrets" {
+  name = "LambdaSecretsAccess"
+  role = aws_iam_role.iam_para_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Action = [
+        "secretsmanager:GetSecretValue"
+      ],
+      Resource = aws_secretsmanager_secret.gemini_api_key.arn
+    }]
+  })
+}
+
 # --- LAMBDAS ---
-
-# Agente 2: Rápido, solo lee S3
 resource "aws_lambda_function" "agente_analista" {
-  function_name    = "Agente2_Analista"
-  role             = aws_iam_role.iam_para_lambda.arn
-  handler          = "agentes.agente_analista"
-  runtime          = "python3.12"
-  filename         = "agentes.zip"
-  source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 30 
+  function_name = "Agente2_Analista-${var.environment}"
+  role          = aws_iam_role.iam_para_lambda.arn
+  handler       = "agentes.agente_analista"
+  runtime       = "python3.12"
+  timeout       = 30
+  memory_size   = 256
+  
+  s3_bucket         = aws_s3_bucket.lambda_code.id
+  s3_key            = aws_s3_object.lambda_zip.key
+  source_code_hash  = aws_s3_object.lambda_zip.etag
 }
 
-# Agente 3: Lento, habla con IA (Timeout 5 min para reintentos)
 resource "aws_lambda_function" "agente_estratega" {
-  function_name    = "Agente3_Estratega"
-  role             = aws_iam_role.iam_para_lambda.arn
-  handler          = "agentes.agente_estratega"
-  runtime          = "python3.12"
-  filename         = "agentes.zip"
-  source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 300 
-
+  function_name = "Agente3_Estratega-${var.environment}"
+  role          = aws_iam_role.iam_para_lambda.arn
+  handler       = "agentes.agente_estratega"
+  runtime       = "python3.12"
+  timeout       = 300
+  memory_size   = 512
+  
+  s3_bucket         = aws_s3_bucket.lambda_code.id
+  s3_key            = aws_s3_object.lambda_zip.key
+  source_code_hash  = aws_s3_object.lambda_zip.etag
+  
   environment {
     variables = {
-      GEMINI_API_KEY = "PON_AQUI_TU_API_KEY_DE_GOOGLE"
+      SECRETS_MANAGER_KEY = aws_secretsmanager_secret.gemini_api_key.name
     }
   }
 }
 
-# Agente 4: Lento, escribe código (Timeout 5 min para reintentos)
 resource "aws_lambda_function" "agente_generador" {
-  function_name    = "Agente4_Generador"
-  role             = aws_iam_role.iam_para_lambda.arn
-  handler          = "agentes.agente_generador"
-  runtime          = "python3.12"
-  filename         = "agentes.zip"
-  source_code_hash = data.archive_file.codigo_agentes.output_base64sha256
-  timeout          = 300 
-
+  function_name = "Agente4_Generador-${var.environment}"
+  role          = aws_iam_role.iam_para_lambda.arn
+  handler       = "agentes.agente_generador"
+  runtime       = "python3.12"
+  timeout       = 300
+  memory_size   = 512
+  
+  s3_bucket         = aws_s3_bucket.lambda_code.id
+  s3_key            = aws_s3_object.lambda_zip.key
+  source_code_hash  = aws_s3_object.lambda_zip.etag
+  
   environment {
     variables = {
-      GEMINI_API_KEY = "PON_AQUI_TU_API_KEY_DE_GOOGLE"
+      SECRETS_MANAGER_KEY = aws_secretsmanager_secret.gemini_api_key.name
     }
   }
 }
 
-# --- STEP FUNCTIONS (Con Semáforos de Espera) ---
+# Límites de concurrencia
+resource "aws_lambda_function_concurrency_limit" "agente_estratega" {
+  function_name             = aws_lambda_function.agente_estratega.function_name
+  reserved_concurrent_executions = 5
+}
+
+resource "aws_lambda_function_concurrency_limit" "agente_generador" {
+  function_name             = aws_lambda_function.agente_generador.function_name
+  reserved_concurrent_executions = 5
+}
+
+# --- CLOUDWATCH LOGS ---
+resource "aws_cloudwatch_log_group" "lambda_logs_analyst" {
+  name              = "/aws/lambda/${aws_lambda_function.agente_analista.function_name}"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_group" "lambda_logs_strategist" {
+  name              = "/aws/lambda/${aws_lambda_function.agente_estratega.function_name}"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_group" "lambda_logs_generator" {
+  name              = "/aws/lambda/${aws_lambda_function.agente_generador.function_name}"
+  retention_in_days = 30
+}
+
+# --- SNS PARA ALERTAS ---
+resource "aws_sns_topic" "alertas" {
+  name = "agentes-forenses-alertas-${var.environment}"
+}
+
+resource "aws_sns_topic_subscription" "alertas_email" {
+  topic_arn = aws_sns_topic.alertas.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+# --- STEP FUNCTIONS CON RESILIENCIA ---
 resource "aws_iam_role" "sfn_role" {
-  name = "OrquestadorForenseRole"
+  name = "OrquestadorForenseRole-${var.environment}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -116,25 +253,46 @@ resource "aws_iam_role_policy" "sfn_policy" {
   role = aws_iam_role.sfn_role.id
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [{
-      Action = "lambda:InvokeFunction",
-      Effect = "Allow",
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Action = "lambda:InvokeFunction",
+        Effect = "Allow",
+        Resource = "*"
+      },
+      {
+        Action = "sns:Publish",
+        Effect = "Allow",
+        Resource = aws_sns_topic.alertas.arn
+      }
+    ]
   })
 }
 
 resource "aws_sfn_state_machine" "orquestador" {
-  name     = "FlujoAnalisisForense"
+  name     = "FlujoAnalisisForense-${var.environment}"
   role_arn = aws_iam_role.sfn_role.arn
   definition = <<EOF
 {
-  "Comment": "Orquestación con Semáforos para evitar Rate Limit de Google",
+  "Comment": "Orquestación con Resiliencia y Semáforos",
   "StartAt": "AgenteAnalista",
   "States": {
     "AgenteAnalista": {
       "Type": "Task",
       "Resource": "${aws_lambda_function.agente_analista.arn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ErrorHandler"
+        }
+      ],
       "Next": "EsperarEnfriamiento1"
     },
     "EsperarEnfriamiento1": {
@@ -145,6 +303,20 @@ resource "aws_sfn_state_machine" "orquestador" {
     "AgenteEstratega": {
       "Type": "Task",
       "Resource": "${aws_lambda_function.agente_estratega.arn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 6,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ErrorHandler"
+        }
+      ],
       "Next": "EsperarEnfriamiento2"
     },
     "EsperarEnfriamiento2": {
@@ -155,6 +327,30 @@ resource "aws_sfn_state_machine" "orquestador" {
     "AgenteGenerador": {
       "Type": "Task",
       "Resource": "${aws_lambda_function.agente_generador.arn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 6,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ErrorHandler"
+        }
+      ],
+      "End": true
+    },
+    "ErrorHandler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${aws_sns_topic.alertas.arn}",
+        "Subject": "❌ Error en Agentes Forenses",
+        "Message.$": "$"
+      },
       "End": true
     }
   }
@@ -162,19 +358,9 @@ resource "aws_sfn_state_machine" "orquestador" {
 EOF
 }
 
-# --- S3 & EVENTBRIDGE ---
-resource "aws_s3_bucket" "buzon_auditoria" {
-  bucket_prefix = "forense-hub-ingesta-"
-  force_destroy = true
-}
-
-resource "aws_s3_bucket_notification" "bucket_notify" {
-  bucket      = aws_s3_bucket.buzon_auditoria.id
-  eventbridge = true
-}
-
+# --- EVENTBRIDGE ---
 resource "aws_iam_role" "eventbridge_role" {
-  name = "EventBridgeInvokeSFNRole"
+  name = "EventBridgeInvokeSFNRole-${var.environment}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -199,7 +385,7 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
 }
 
 resource "aws_cloudwatch_event_rule" "s3_trigger_sfn" {
-  name = "ReglaS3aStepFunction"
+  name = "ReglaS3aStepFunction-${var.environment}"
   event_pattern = jsonencode({
     source      = ["aws.s3"],
     detail-type = ["Object Created"],
@@ -218,6 +404,18 @@ resource "aws_cloudwatch_event_target" "target_sfn" {
   role_arn  = aws_iam_role.eventbridge_role.arn
 }
 
+# --- OUTPUTS ---
 output "bucket_ingesta_nombre" {
-  value = aws_s3_bucket.buzon_auditoria.id
+  value       = aws_s3_bucket.buzon_auditoria.id
+  description = "Nombre del bucket para subir reportes"
+}
+
+output "step_function_arn" {
+  value       = aws_sfn_state_machine.orquestador.arn
+  description = "ARN de la Step Function"
+}
+
+output "sns_topic_arn" {
+  value       = aws_sns_topic.alertas.arn
+  description = "ARN del topic SNS para alertas"
 }
