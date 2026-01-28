@@ -1,5 +1,7 @@
 # Ignorar archivos de variables con secretos
 terraform.tfvars
+ver_modelos.py
+test_key_api.py
 *.tfvars
 
 # Ignorar estado de Terraform (también contiene datos sensibles)
