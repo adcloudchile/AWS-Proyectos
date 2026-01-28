@@ -30,7 +30,6 @@ def obtener_api_key():
         secret_string = response["SecretString"]
         secret_dict = json.loads(secret_string)
 
-        # Eliminamos espacios basura
         raw_key = secret_dict["api_key"]
         CACHED_API_KEY = raw_key.strip()
 
@@ -42,14 +41,13 @@ def obtener_api_key():
 
 def invocar_gemini(prompt, intentos=3):
     """
-    Cliente Gemini robusto con depuración.
+    Cliente Gemini 2.0 Flash.
     """
     try:
         api_key = obtener_api_key()
     except Exception:
         return "Error Fatal: No se pudo obtener la API Key."
 
-    # --- CAMBIO IMPORTANTE: Usamos gemini-2.0-flash ---
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
@@ -80,9 +78,8 @@ def invocar_gemini(prompt, intentos=3):
                 time.sleep(5)
                 continue
             if e.code == 403:
-                return f"Error 403: Acceso Denegado. Revisa permisos/facturación."
+                return f"Error 403: Acceso Denegado."
 
-            # Si da 404 con el modelo nuevo, esperamos un poco
             time.sleep(2)
             continue
 
@@ -94,6 +91,53 @@ def invocar_gemini(prompt, intentos=3):
     return f"Error Fatal: Google no respondió correctamente tras {intentos} intentos."
 
 
+# --- NUEVO: API PRESIGNER (El Portero) ---
+def api_presigner(event, context):
+    """
+    Genera URLs firmadas para que el Frontend pueda subir (PUT) o bajar (GET) archivos de S3.
+    """
+    print("🔑 Generando URL firmada...")
+    try:
+        body = json.loads(event.get("body", "{}"))
+        accion = body.get("accion", "subir")  # 'subir' o 'bajar'
+        nombre_archivo = body.get("archivo", f"reporte_{int(time.time())}.json")
+        bucket_name = os.environ.get("BUCKET_NOMBRE")
+
+        if accion == "subir":
+            # URL para subir el reporte JSON
+            url = s3_client.generate_presigned_url(
+                ClientMethod="put_object",
+                Params={
+                    "Bucket": bucket_name,
+                    "Key": nombre_archivo,
+                    "ContentType": "application/json",
+                },
+                ExpiresIn=300,
+            )
+        else:
+            # URL para descargar el script Python generado
+            # Asumimos que el script se guarda en la carpeta 'resultados/'
+            key_resultado = f"resultados/{nombre_archivo}"
+            url = s3_client.generate_presigned_url(
+                ClientMethod="get_object",
+                Params={"Bucket": bucket_name, "Key": key_resultado},
+                ExpiresIn=300,
+            )
+
+        return {
+            "statusCode": 200,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",  # CORS para la web
+            },
+            "body": json.dumps({"url": url, "archivo": nombre_archivo}),
+        }
+
+    except Exception as e:
+        print(f"❌ Error generando URL: {e}")
+        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+
+
 # --- AGENTE 2: ANALISTA ---
 def agente_analista(event, context):
     print("🕵️‍♂️ [Agente 2] Procesando reporte...")
@@ -101,6 +145,10 @@ def agente_analista(event, context):
         if "detail" in event:
             bucket_name = event["detail"]["bucket"]["name"]
             file_key = event["detail"]["object"]["key"]
+
+            # Ignorar si es un archivo de resultados para evitar bucles infinitos
+            if file_key.startswith("resultados/"):
+                return {"status": "SKIP", "razon": "Es un archivo de salida"}
         else:
             return {"status": "SKIP", "razon": "Evento no es S3 Put"}
 
@@ -127,6 +175,8 @@ def agente_analista(event, context):
 
         return {
             "status": "OK",
+            "bucket_origen": bucket_name,  # Pasamos el nombre del bucket para usarlo después
+            "archivo_origen": file_key,
             "logs_gigantes": logs_criticos,
             "ecs_problemas": ecs_issues,
             "tipo_analisis": datos.get("analisis_tipo", "General"),
@@ -142,6 +192,8 @@ def agente_estratega(event, context):
 
     logs = event.get("logs_gigantes", [])
     ecs = event.get("ecs_problemas", [])
+    bucket = event.get("bucket_origen")
+    archivo = event.get("archivo_origen")
 
     if not logs and not ecs:
         return {"plan_maestro": "Nada que reportar. Sistema saludable."}
@@ -156,14 +208,18 @@ def agente_estratega(event, context):
     """
 
     plan = invocar_gemini(prompt)
-    return {"plan_maestro": plan}
+
+    # Pasamos los datos del bucket al siguiente paso
+    return {"plan_maestro": plan, "bucket_origen": bucket, "archivo_origen": archivo}
 
 
 # --- AGENTE 4: GENERADOR ---
 def agente_generador(event, context):
-    print("👷 [Agente 4] Programando...")
+    print("👷 [Agente 4] Programando y Guardando...")
 
     plan = event.get("plan_maestro", "")
+    bucket_name = event.get("bucket_origen")
+    archivo_origen = event.get("archivo_origen")  # ej: reporte.json
 
     if "Error" in plan or "Nada que reportar" in plan:
         return {"resultado": "OMITIDO", "mensaje": plan}
@@ -180,6 +236,36 @@ def agente_generador(event, context):
 
     script = invocar_gemini(prompt)
     script_limpio = script.replace("```python", "").replace("```", "").strip()
+
+    # --- NUEVO: GUARDAR RESULTADO EN S3 ---
+    # Si el archivo original era 'reporte.json', el resultado será 'resultados/reporte.py'
+    try:
+        if bucket_name and archivo_origen:
+            nombre_base = os.path.basename(archivo_origen).replace(".json", "")
+            key_destino = f"resultados/{nombre_base}.py"
+
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=key_destino,
+                Body=script_limpio,
+                ContentType="text/x-python",
+            )
+            print(f"💾 Script guardado en s3://{bucket_name}/{key_destino}")
+
+            return {
+                "resultado": "EXITO",
+                "script_s3_key": key_destino,
+                "ia_usada": "Gemini 2.0 Flash",
+                "script_generado": script_limpio,
+            }
+    except Exception as e:
+        print(f"⚠️ Error guardando en S3: {e}")
+        # Retornamos el script igual aunque falle el guardado
+        return {
+            "resultado": "EXITO_SIN_GUARDAR",
+            "error_s3": str(e),
+            "script_generado": script_limpio,
+        }
 
     return {
         "resultado": "EXITO",
