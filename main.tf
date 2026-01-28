@@ -93,7 +93,9 @@ resource "aws_s3_object" "lambda_zip" {
   bucket = aws_s3_bucket.lambda_code.id
   key    = "agentes-${var.app_version}.zip"
   source = data.archive_file.codigo_agentes.output_path
-  etag   = data.archive_file.codigo_agentes.output_base64sha256
+  
+  # CORRECCIÓN 1: Usar MD5 para S3 (esto evita el conflicto)
+  etag   = filemd5(data.archive_file.codigo_agentes.output_path)
 }
 
 # --- IAM ROLES ---
@@ -156,7 +158,9 @@ resource "aws_lambda_function" "agente_analista" {
   
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  source_code_hash  = aws_s3_object.lambda_zip.etag
+  
+  # CORRECCIÓN 2: Apuntar directo al hash local, no al del objeto S3
+  source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
 }
 
 resource "aws_lambda_function" "agente_estratega" {
@@ -167,12 +171,13 @@ resource "aws_lambda_function" "agente_estratega" {
   timeout       = 300
   memory_size   = 512
   
-  # CONFIGURACIÓN DE CONCURRENCIA CORREGIDA
   reserved_concurrent_executions = 5
 
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  source_code_hash  = aws_s3_object.lambda_zip.etag
+  
+  # CORRECCIÓN 2: Apuntar directo al hash local
+  source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
   
   environment {
     variables = {
@@ -189,12 +194,13 @@ resource "aws_lambda_function" "agente_generador" {
   timeout       = 300
   memory_size   = 512
   
-  # CONFIGURACIÓN DE CONCURRENCIA CORREGIDA
   reserved_concurrent_executions = 5
   
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  source_code_hash  = aws_s3_object.lambda_zip.etag
+  
+  # CORRECCIÓN 2: Apuntar directo al hash local
+  source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
   
   environment {
     variables = {
