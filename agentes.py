@@ -30,8 +30,7 @@ def obtener_api_key():
         secret_string = response["SecretString"]
         secret_dict = json.loads(secret_string)
 
-        # --- CORRECCIÓN CRÍTICA: .strip() ---
-        # Eliminamos espacios en blanco o saltos de línea que vengan del Secreto
+        # Eliminamos espacios basura
         raw_key = secret_dict["api_key"]
         CACHED_API_KEY = raw_key.strip()
 
@@ -50,8 +49,8 @@ def invocar_gemini(prompt, intentos=3):
     except Exception:
         return "Error Fatal: No se pudo obtener la API Key."
 
-    # Usamos el modelo 1.5 Flash (Estándar)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # --- CAMBIO IMPORTANTE: Usamos gemini-2.0-flash ---
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -70,21 +69,20 @@ def invocar_gemini(prompt, intentos=3):
                     return f"Respuesta inesperada: {json.dumps(result)}"
 
         except urllib.error.HTTPError as e:
-            # --- DEPURACIÓN MEJORADA ---
             print(f"⚠️ Intento {i+1} fallido. Código HTTP: {e.code}")
-            print(
-                f"   Respuesta Google: {e.read().decode('utf-8')[:200]}..."
-            )  # Imprime el error real de Google
+            try:
+                print(f"   Respuesta Google: {e.read().decode('utf-8')[:200]}")
+            except:
+                pass
 
             if e.code == 429:
                 print(f"🛑 Rate Limit. Esperando 5s...")
                 time.sleep(5)
                 continue
             if e.code == 403:
-                # Si da 403, es permiso o facturación. No tiene sentido reintentar.
-                return f"Error 403: Acceso Denegado. Verifica que la API Key tenga permisos y facturación en el proyecto correcto."
+                return f"Error 403: Acceso Denegado. Revisa permisos/facturación."
 
-            # Para errores 404, 500, 503, reintentamos un poco
+            # Si da 404 con el modelo nuevo, esperamos un poco
             time.sleep(2)
             continue
 
@@ -93,7 +91,7 @@ def invocar_gemini(prompt, intentos=3):
             time.sleep(2)
             continue
 
-    return f"Error Fatal: Google no respondió tras {intentos} intentos. Revisa CloudWatch para ver el código de error."
+    return f"Error Fatal: Google no respondió correctamente tras {intentos} intentos."
 
 
 # --- AGENTE 2: ANALISTA ---
@@ -185,6 +183,6 @@ def agente_generador(event, context):
 
     return {
         "resultado": "EXITO",
-        "ia_usada": "Gemini 1.5 Flash",
+        "ia_usada": "Gemini 2.0 Flash",
         "script_generado": script_limpio,
     }
