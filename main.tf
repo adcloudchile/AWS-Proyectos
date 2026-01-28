@@ -167,6 +167,9 @@ resource "aws_lambda_function" "agente_estratega" {
   timeout       = 300
   memory_size   = 512
   
+  # CONFIGURACIÓN DE CONCURRENCIA CORREGIDA
+  reserved_concurrent_executions = 5
+
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
   source_code_hash  = aws_s3_object.lambda_zip.etag
@@ -186,6 +189,9 @@ resource "aws_lambda_function" "agente_generador" {
   timeout       = 300
   memory_size   = 512
   
+  # CONFIGURACIÓN DE CONCURRENCIA CORREGIDA
+  reserved_concurrent_executions = 5
+  
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
   source_code_hash  = aws_s3_object.lambda_zip.etag
@@ -195,17 +201,6 @@ resource "aws_lambda_function" "agente_generador" {
       SECRETS_MANAGER_KEY = aws_secretsmanager_secret.gemini_api_key.name
     }
   }
-}
-
-# Límites de concurrencia
-resource "aws_lambda_function_concurrency_limit" "agente_estratega" {
-  function_name             = aws_lambda_function.agente_estratega.function_name
-  reserved_concurrent_executions = 5
-}
-
-resource "aws_lambda_function_concurrency_limit" "agente_generador" {
-  function_name             = aws_lambda_function.agente_generador.function_name
-  reserved_concurrent_executions = 5
 }
 
 # --- CLOUDWATCH LOGS ---
