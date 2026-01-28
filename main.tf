@@ -24,7 +24,7 @@ provider "aws" {
       Project     = "AgentesForenses"
       Environment = var.environment
       ManagedBy   = "Terraform"
-      # CreatedAt = timestamp()  <-- ELIMINADO PARA EVITAR ERROR DE INCONSISTENCIA
+      # CreatedAt eliminado para evitar errores de inconsistencia
     }
   }
 }
@@ -167,7 +167,7 @@ resource "aws_lambda_function" "agente_estratega" {
   timeout       = 300
   memory_size   = 512
   
-  reserved_concurrent_executions = 5
+  # ELIMINADO reserved_concurrent_executions para evitar error de cuenta nueva
 
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
@@ -188,7 +188,7 @@ resource "aws_lambda_function" "agente_generador" {
   timeout       = 300
   memory_size   = 512
   
-  reserved_concurrent_executions = 5
+  # ELIMINADO reserved_concurrent_executions para evitar error de cuenta nueva
   
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
