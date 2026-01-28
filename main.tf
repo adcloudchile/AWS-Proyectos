@@ -24,7 +24,7 @@ provider "aws" {
       Project     = "AgentesForenses"
       Environment = var.environment
       ManagedBy   = "Terraform"
-      CreatedAt   = timestamp()
+      # CreatedAt = timestamp()  <-- ELIMINADO PARA EVITAR ERROR DE INCONSISTENCIA
     }
   }
 }
@@ -93,8 +93,6 @@ resource "aws_s3_object" "lambda_zip" {
   bucket = aws_s3_bucket.lambda_code.id
   key    = "agentes-${var.app_version}.zip"
   source = data.archive_file.codigo_agentes.output_path
-  
-  # CORRECCIÓN 1: Usar MD5 para S3 (esto evita el conflicto)
   etag   = filemd5(data.archive_file.codigo_agentes.output_path)
 }
 
@@ -158,8 +156,6 @@ resource "aws_lambda_function" "agente_analista" {
   
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  
-  # CORRECCIÓN 2: Apuntar directo al hash local, no al del objeto S3
   source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
 }
 
@@ -175,8 +171,6 @@ resource "aws_lambda_function" "agente_estratega" {
 
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  
-  # CORRECCIÓN 2: Apuntar directo al hash local
   source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
   
   environment {
@@ -198,8 +192,6 @@ resource "aws_lambda_function" "agente_generador" {
   
   s3_bucket         = aws_s3_bucket.lambda_code.id
   s3_key            = aws_s3_object.lambda_zip.key
-  
-  # CORRECCIÓN 2: Apuntar directo al hash local
   source_code_hash  = data.archive_file.codigo_agentes.output_base64sha256
   
   environment {
