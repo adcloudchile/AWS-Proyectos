@@ -1,4 +1,3 @@
-# variables.tf
 variable "gemini_api_key" {
   description = "API Key de Google Gemini"
   type        = string
@@ -10,7 +9,8 @@ variable "alert_email" {
   type        = string
 }
 
-variable "version" {
+# CAMBIO: De "version" a "app_version"
+variable "app_version" {
   description = "Versión del código"
   type        = string
   default     = "1.0.0"

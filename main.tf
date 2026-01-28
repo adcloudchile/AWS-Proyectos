@@ -86,12 +86,12 @@ resource "aws_s3_bucket_versioning" "lambda_code" {
 data "archive_file" "codigo_agentes" {
   type        = "zip"
   source_file = "${path.module}/agentes.py"
-  output_path = "${path.module}/agentes-${var.version}.zip"
+  output_path = "${path.module}/agentes-${var.app_version}.zip"
 }
 
 resource "aws_s3_object" "lambda_zip" {
   bucket = aws_s3_bucket.lambda_code.id
-  key    = "agentes-${var.version}.zip"
+  key    = "agentes-${var.app_version}.zip"
   source = data.archive_file.codigo_agentes.output_path
   etag   = data.archive_file.codigo_agentes.output_base64sha256
 }
