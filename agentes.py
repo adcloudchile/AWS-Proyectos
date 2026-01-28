@@ -7,18 +7,47 @@ import time
 import random
 
 s3_client = boto3.client("s3")
+secrets_client = boto3.client("secretsmanager")
 
-# --- CLAVE MANUAL ---
-API_KEY_MANUAL = "AIzaSyDsckFJBiX_5mtPHXPUgAudGbO0LDUvFkQ"
+# Variable global para cachear la llave y no llamar a Secrets Manager en cada ejecución
+CACHED_API_KEY = None
 
 
-def invocar_gemini(prompt, intentos=6):  # <--- AUMENTADO A 6 INTENTOS
+def obtener_api_key():
     """
-    Cliente Gemini en 'Modo Tanque'.
-    Si Google da error de cuota, espera 30 segundos reales.
+    Recupera la API Key desde AWS Secrets Manager de forma segura.
     """
-    api_key = API_KEY_MANUAL.strip()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={api_key}"
+    global CACHED_API_KEY
+    if CACHED_API_KEY:
+        return CACHED_API_KEY
+
+    secret_name = os.environ.get("SECRETS_MANAGER_KEY")
+    if not secret_name:
+        raise ValueError("❌ Error: Falta la variable de entorno SECRETS_MANAGER_KEY")
+
+    try:
+        response = secrets_client.get_secret_value(SecretId=secret_name)
+        secret_string = response["SecretString"]
+        # Terraform guardó esto como JSON: {"api_key": "..."}
+        secret_dict = json.loads(secret_string)
+        CACHED_API_KEY = secret_dict["api_key"]
+        return CACHED_API_KEY
+    except Exception as e:
+        print(f"❌ Error crítico obteniendo secreto: {str(e)}")
+        raise e
+
+
+def invocar_gemini(prompt, intentos=3):
+    """
+    Cliente Gemini usando credenciales seguras.
+    """
+    try:
+        api_key = obtener_api_key()
+    except Exception:
+        return "Error Fatal: No se pudo obtener la API Key."
+
+    # Usamos el modelo estable 1.5 en lugar de 'latest' para evitar errores 404
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -37,57 +66,57 @@ def invocar_gemini(prompt, intentos=6):  # <--- AUMENTADO A 6 INTENTOS
                     return f"Respuesta inesperada: {json.dumps(result)}"
 
         except urllib.error.HTTPError as e:
-            # ESTRATEGIA DE ESPERA AGRESIVA
-            if e.code == 429:  # Too Many Requests
-                print(
-                    f"🛑 CUOTA LLENA (Intento {i+1}/{intentos}). Pausando 30 segundos para enfriar..."
-                )
-                time.sleep(30)  # Espera larga obligatoria
+            if e.code == 429:
+                print(f"🛑 Rate Limit (429). Esperando 5s...")
+                time.sleep(5)
                 continue
+            if e.code == 403:
+                return f"Error 403: La API Key no tiene permisos o facturación activa. Revisa Google Cloud."
 
-            # Otros errores (500, 503)
-            wait_time = (2**i) + random.uniform(0, 1)
-            print(f"⚠️ Error Google {e.code}. Reintentando en {wait_time:.1f}s...")
-            time.sleep(wait_time)
+            print(f"⚠️ Error Google {e.code}. Reintentando...")
+            time.sleep(2)
             continue
 
         except Exception as e:
             print(f"❌ Error conexión: {e}. Reintentando...")
-            time.sleep(5)
+            time.sleep(2)
             continue
 
-    return "Error Fatal: Google sigue saturado tras 6 intentos largos."
+    return "Error Fatal: Google no respondió tras varios intentos."
 
 
 # --- AGENTE 2: ANALISTA ---
 def agente_analista(event, context):
     print("🕵️‍♂️ [Agente 2] Procesando reporte...")
     try:
-        detail = event.get("detail", {})
-        bucket_name = detail["bucket"]["name"]
-        file_key = detail["object"]["key"]
+        # Lógica para soportar invocación directa o vía EventBridge/S3
+        if "detail" in event:
+            bucket_name = event["detail"]["bucket"]["name"]
+            file_key = event["detail"]["object"]["key"]
+        else:
+            # Fallback para pruebas manuales si el evento es distinto
+            print("⚠️ Evento no estándar, buscando datos simulados...")
+            return {"status": "SKIP", "razon": "Evento no es S3 Put"}
 
         response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
         datos = json.loads(response["Body"].read().decode("utf-8"))
 
         hallazgos = datos.get("hallazgos_criticos", {})
 
+        # Extracción segura de datos
         logs_criticos = []
-        for log in hallazgos.get("top_log_consumers", []):
-            logs_criticos.append(f"LOG: {log['name']} ({log['size_gb']} GB)")
+        if "top_log_consumers" in hallazgos:
+            for log in hallazgos["top_log_consumers"]:
+                logs_criticos.append(
+                    f"LOG: {log.get('name')} ({log.get('size_gb')} GB)"
+                )
 
         ecs_issues = []
-        for issue in hallazgos.get("ecs_misconfigurations", []):
-            ecs_issues.append(f"ECS: {issue['service']} config {issue['bad_config']}")
-
-        # Fallback
-        if not logs_criticos and not ecs_issues:
-            aws_data = datos.get("aws_data", {})
-            logs_criticos = [
-                f"Legacy: {k} ${v}"
-                for k, v in aws_data.get("last_month_costs", {}).items()
-                if v > 50
-            ]
+        if "ecs_misconfigurations" in hallazgos:
+            for issue in hallazgos["ecs_misconfigurations"]:
+                ecs_issues.append(
+                    f"ECS: {issue.get('service')} config {issue.get('bad_config')}"
+                )
 
         print(f"   > Datos: {len(logs_criticos)} Logs | {len(ecs_issues)} ECS.")
 
@@ -98,6 +127,7 @@ def agente_analista(event, context):
             "tipo_analisis": datos.get("analisis_tipo", "General"),
         }
     except Exception as e:
+        print(f"❌ Error en Analista: {str(e)}")
         return {"status": "ERROR", "error": str(e)}
 
 
@@ -108,16 +138,15 @@ def agente_estratega(event, context):
     logs = event.get("logs_gigantes", [])
     ecs = event.get("ecs_problemas", [])
 
+    if not logs and not ecs:
+        return {"plan_maestro": "Nada que reportar. Sistema saludable."}
+
     prompt = f"""
     Eres Arquitecto AWS. Analiza:
     1. LOGS GIGANTES: {logs}
     2. APPS MAL CONFIGURADAS: {ecs}
     
-    Genera un plan de 3 pasos numerados para:
-    1. Reducir retención de logs (7 días).
-    2. Corregir Log Level en apps.
-    3. Crear alarma de costos.
-    
+    Genera un plan de 3 pasos numerados para solucionar esto.
     Responde SOLO con la lista.
     """
 
@@ -131,8 +160,8 @@ def agente_generador(event, context):
 
     plan = event.get("plan_maestro", "")
 
-    if "Error Fatal" in plan:
-        return {"resultado": "FALLO_PREVIO", "mensaje": plan}
+    if "Error" in plan or "Nada que reportar" in plan:
+        return {"resultado": "OMITIDO", "mensaje": plan}
 
     prompt = f"""
     Eres experto Python Boto3. Escribe script para:
@@ -140,16 +169,16 @@ def agente_generador(event, context):
     
     REGLAS:
     1. Usa 'boto3'.
-    2. Implementa 'put_retention_policy' (7 días) para los logs detectados.
-    3. Implementa 'put_metric_alarm'.
-    4. SOLO CÓDIGO. Sin markdown.
+    2. Maneja excepciones.
+    3. SOLO CÓDIGO. Sin markdown ni explicaciones.
     """
 
     script = invocar_gemini(prompt)
+    # Limpieza básica de markdown
     script_limpio = script.replace("```python", "").replace("```", "").strip()
 
     return {
         "resultado": "EXITO",
-        "ia_usada": "Gemini Flash Latest",
+        "ia_usada": "Gemini 1.5 Flash",
         "script_generado": script_limpio,
     }
