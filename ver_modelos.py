@@ -2,7 +2,7 @@ import urllib.request
 import json
 
 # --- PON TU API KEY AQUÍ ---
-API_KEY = "AIzaSyDsckFJBiX_5mtPHXPUgAudGbO0LDUvFkQ"
+API_KEY = "AIzaSyDfsmcK0FdfDs3ZzWn2sUINYqpEFEwCHlo"
 
 print("📡 Consultando catálogo de modelos disponibles para tu clave...")
 

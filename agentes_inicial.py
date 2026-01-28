@@ -12,9 +12,17 @@ API_KEY_MANUAL = "AIzaSyDsckFJBiX_5mtPHXPUgAudGbO0LDUvFkQ"  # <--- Tu clave real
 
 
 def invocar_gemini(prompt, intentos=3):
-    """Cliente Gemini Flash Latest (Estable)"""
-    api_key = API_KEY_MANUAL.strip()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={api_key}"
+    """
+    Cliente Gemini robusto con depuración.
+    """
+    try:
+        api_key = obtener_api_key()
+    except Exception:
+        return "Error Fatal: No se pudo obtener la API Key."
+
+    # --- CAMBIO AQUÍ: Usamos el modelo que SÍ tienes (gemini-2.0-flash) ---
+    # Nota: No ponemos 'models/' al inicio porque la URL ya lo incluye
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -31,11 +39,31 @@ def invocar_gemini(prompt, intentos=3):
                     return result["candidates"][0]["content"]["parts"][0]["text"]
                 except (KeyError, IndexError):
                     return f"Respuesta inesperada: {json.dumps(result)}"
-        except Exception as e:
+
+        except urllib.error.HTTPError as e:
+            print(f"⚠️ Intento {i+1} fallido. Código HTTP: {e.code}")
+            try:
+                error_body = e.read().decode("utf-8")
+                print(f"   Respuesta Google: {error_body}")
+            except:
+                pass
+
+            if e.code == 429:
+                print(f"🛑 Rate Limit. Esperando 5s...")
+                time.sleep(5)
+                continue
+            if e.code == 403:
+                return f"Error 403: Acceso Denegado. Revisa permisos/facturación."
+
             time.sleep(2)
             continue
 
-    return "Error: Se agotaron los reintentos con IA."
+        except Exception as e:
+            print(f"❌ Error conexión no HTTP: {str(e)}")
+            time.sleep(2)
+            continue
+
+    return f"Error Fatal: Google no respondió correctamente tras {intentos} intentos."
 
 
 # --- AGENTE 2: ANALISTA (ADAPTADO AL NUEVO JSON) ---
