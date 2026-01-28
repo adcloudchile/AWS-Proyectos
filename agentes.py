@@ -9,7 +9,7 @@ import random
 s3_client = boto3.client("s3")
 secrets_client = boto3.client("secretsmanager")
 
-# Variable global para cachear la llave y no llamar a Secrets Manager en cada ejecución
+# Variable global para cachear la llave
 CACHED_API_KEY = None
 
 
@@ -28,9 +28,13 @@ def obtener_api_key():
     try:
         response = secrets_client.get_secret_value(SecretId=secret_name)
         secret_string = response["SecretString"]
-        # Terraform guardó esto como JSON: {"api_key": "..."}
         secret_dict = json.loads(secret_string)
-        CACHED_API_KEY = secret_dict["api_key"]
+
+        # --- CORRECCIÓN CRÍTICA: .strip() ---
+        # Eliminamos espacios en blanco o saltos de línea que vengan del Secreto
+        raw_key = secret_dict["api_key"]
+        CACHED_API_KEY = raw_key.strip()
+
         return CACHED_API_KEY
     except Exception as e:
         print(f"❌ Error crítico obteniendo secreto: {str(e)}")
@@ -39,14 +43,14 @@ def obtener_api_key():
 
 def invocar_gemini(prompt, intentos=3):
     """
-    Cliente Gemini usando credenciales seguras.
+    Cliente Gemini robusto con depuración.
     """
     try:
         api_key = obtener_api_key()
     except Exception:
         return "Error Fatal: No se pudo obtener la API Key."
 
-    # Usamos el modelo estable 1.5 en lugar de 'latest' para evitar errores 404
+    # Usamos el modelo 1.5 Flash (Estándar)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
 
     headers = {"Content-Type": "application/json"}
@@ -66,36 +70,40 @@ def invocar_gemini(prompt, intentos=3):
                     return f"Respuesta inesperada: {json.dumps(result)}"
 
         except urllib.error.HTTPError as e:
+            # --- DEPURACIÓN MEJORADA ---
+            print(f"⚠️ Intento {i+1} fallido. Código HTTP: {e.code}")
+            print(
+                f"   Respuesta Google: {e.read().decode('utf-8')[:200]}..."
+            )  # Imprime el error real de Google
+
             if e.code == 429:
-                print(f"🛑 Rate Limit (429). Esperando 5s...")
+                print(f"🛑 Rate Limit. Esperando 5s...")
                 time.sleep(5)
                 continue
             if e.code == 403:
-                return f"Error 403: La API Key no tiene permisos o facturación activa. Revisa Google Cloud."
+                # Si da 403, es permiso o facturación. No tiene sentido reintentar.
+                return f"Error 403: Acceso Denegado. Verifica que la API Key tenga permisos y facturación en el proyecto correcto."
 
-            print(f"⚠️ Error Google {e.code}. Reintentando...")
+            # Para errores 404, 500, 503, reintentamos un poco
             time.sleep(2)
             continue
 
         except Exception as e:
-            print(f"❌ Error conexión: {e}. Reintentando...")
+            print(f"❌ Error conexión no HTTP: {str(e)}")
             time.sleep(2)
             continue
 
-    return "Error Fatal: Google no respondió tras varios intentos."
+    return f"Error Fatal: Google no respondió tras {intentos} intentos. Revisa CloudWatch para ver el código de error."
 
 
 # --- AGENTE 2: ANALISTA ---
 def agente_analista(event, context):
     print("🕵️‍♂️ [Agente 2] Procesando reporte...")
     try:
-        # Lógica para soportar invocación directa o vía EventBridge/S3
         if "detail" in event:
             bucket_name = event["detail"]["bucket"]["name"]
             file_key = event["detail"]["object"]["key"]
         else:
-            # Fallback para pruebas manuales si el evento es distinto
-            print("⚠️ Evento no estándar, buscando datos simulados...")
             return {"status": "SKIP", "razon": "Evento no es S3 Put"}
 
         response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
@@ -103,7 +111,6 @@ def agente_analista(event, context):
 
         hallazgos = datos.get("hallazgos_criticos", {})
 
-        # Extracción segura de datos
         logs_criticos = []
         if "top_log_consumers" in hallazgos:
             for log in hallazgos["top_log_consumers"]:
@@ -174,7 +181,6 @@ def agente_generador(event, context):
     """
 
     script = invocar_gemini(prompt)
-    # Limpieza básica de markdown
     script_limpio = script.replace("```python", "").replace("```", "").strip()
 
     return {
