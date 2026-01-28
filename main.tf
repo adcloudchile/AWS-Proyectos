@@ -475,6 +475,65 @@ resource "aws_cloudwatch_event_target" "target_sfn" {
   role_arn  = aws_iam_role.eventbridge_role.arn
 }
 
+# --- NUEVO: BUCKET PARA HOSTING WEB (FRONTEND) ---
+resource "aws_s3_bucket" "web_hosting" {
+  bucket_prefix = "forense-web-app-${var.environment}-"
+  force_destroy = true # Para poder borrarlo fácil si quieres limpiar
+}
+
+# 1. Configurar como sitio web estático
+resource "aws_s3_bucket_website_configuration" "web_config" {
+  bucket = aws_s3_bucket.web_hosting.id
+
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "index.html" # Importante para React Router
+  }
+}
+
+# 2. Desbloquear acceso público (Necesario para una web pública)
+resource "aws_s3_bucket_public_access_block" "web_public_access" {
+  bucket = aws_s3_bucket.web_hosting.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+# 3. Política de lectura pública (Cualquiera puede VER la web)
+resource "aws_s3_bucket_policy" "web_policy" {
+  bucket = aws_s3_bucket.web_hosting.id
+  depends_on = [aws_s3_bucket_public_access_block.web_public_access]
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject",
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "s3:GetObject",
+        Resource  = "${aws_s3_bucket.web_hosting.arn}/*"
+      }
+    ]
+  })
+}
+
+# --- AGREGAR A OUTPUTS ---
+output "website_url" {
+  value       = aws_s3_bucket_website_configuration.web_config.website_endpoint
+  description = "URL pública de tu Web App"
+}
+
+output "website_bucket_name" {
+  value       = aws_s3_bucket.web_hosting.id
+  description = "Nombre del bucket del frontend"
+}
+
 # --- OUTPUTS ---
 output "bucket_ingesta_nombre" {
   value       = aws_s3_bucket.buzon_auditoria.id
