@@ -15,7 +15,7 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # 2. Configurar credenciales AWS (Las toma de los Secretos que creaste)
+    # 2. Configurar credenciales AWS
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -31,6 +31,11 @@ jobs:
     - name: Terraform Init
       run: terraform init
 
-    # 5. Aplicar cambios (Automáticamente al hacer push a main)
+    # 5. Aplicar cambios
     - name: Terraform Apply
+      # ESTA ES LA SECCIÓN QUE FALTABA:
+      env:
+        # Terraform busca variables que empiecen con TF_VAR_
+        TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_GEMINI_API_KEY }}
+        TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
       run: terraform apply -auto-approve
